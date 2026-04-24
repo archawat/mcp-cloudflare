@@ -1,17 +1,52 @@
 {
-  "name": "mcp-cloudflare",
-  "type": "module",
+  "name": "@archawat/mcp-cloudflare",
   "version": "1.0.0",
-  "description": "MCP server for managing Cloudflare DNS records across multiple domains",
+  "description": "MCP server for managing Cloudflare DNS records across multiple domains from one API token",
+  "type": "module",
+  "bin": {
+    "mcp-cloudflare": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/archawat/mcp-cloudflare.git"
+  },
+  "homepage": "https://github.com/archawat/mcp-cloudflare#readme",
+  "bugs": {
+    "url": "https://github.com/archawat/mcp-cloudflare/issues"
+  },
+  "author": "archawat",
   "scripts": {
     "start": "bun src/index.ts",
-    "dev": "bun --watch src/index.ts"
+    "dev": "bun --watch src/index.ts",
+    "build": "tsc && chmod +x dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepack": "npm run build"
   },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "cloudflare",
+    "dns",
+    "claude"
+  ],
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
   }
 }

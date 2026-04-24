@@ -3,3 +3,5 @@ dist/
 *.log
 .env
 .mcp.json
+CLAUDE.local.md
+*.tgz
