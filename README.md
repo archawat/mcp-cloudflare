@@ -97,22 +97,45 @@ Scope the token to the zones you want to manage, or grant "All zones".
 
 All tools accept either a domain name (`"example.com"`) or a 32-char zone ID as the `zone` argument.
 
-### Bulk result shape
+### Result shape
 
-Bulk tools return per-item results; a single failure doesn't abort the batch:
+Responses are plain text — TSV for lists, one-liners for mutations — to keep token usage low. A single failure in a bulk call doesn't abort the batch.
 
-```json
-{
-  "succeeded": 10,
-  "failed": 1,
-  "results": [
-    { "zone": "example.com", "ok": true,  "record": { "id": "…", "proxied": true } },
-    { "zone": "other.com",   "ok": false, "error": "No proxyable record found for 'www.other.com'." }
-  ]
-}
+`list_dns_records`:
+
+```
+Total: 2
+id	type	name	content	proxied	ttl
+abc123	A	www.example.com	1.2.3.4	true	1
+def456	CNAME	api.example.com	example.com	false	300
 ```
 
-`isError: true` is set on the tool response whenever any item fails, while still returning every result.
+`create_*` / `update_dns_record` / `toggle_proxy` / `delete_dns_record`:
+
+```
+OK: dns_record abc123 created (www.example.com)
+```
+
+`bulk_list_dns_records`:
+
+```
+Zones: 2 (succeeded: 1, failed: 1)
+FAIL: other.com - No zone found for 'other.com'
+
+Records: 1
+zone	id	type	name	content	proxied	ttl
+example.com	abc123	A	www.example.com	1.2.3.4	true	1
+```
+
+`bulk_toggle_proxy` / `bulk_update_dns_record`:
+
+```
+Succeeded: 1, Failed: 1
+OK: example.com/abc123 toggled (www.example.com)
+FAIL: other.com/www.other.com - No proxyable record found for 'www.other.com'.
+```
+
+Errors return `Failed: <message>` with `isError: true`. Bulk tools also set `isError: true` whenever any item fails, while still returning every result.
 
 ## Development
 
