@@ -145,27 +145,133 @@ async function fetchDnsRecords(
   };
 }
 
-function summarizeRecord(r: DnsRecord) {
-  return {
-    id: r.id,
-    zone_id: r.zone_id,
-    type: r.type,
-    name: r.name,
-    content: r.content,
-    proxied: r.proxied,
-    proxiable: r.proxiable,
-    ttl: r.ttl,
-    comment: r.comment ?? undefined,
-  };
-}
-
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+function text(value: string) {
+  return { content: [{ type: "text" as const, text: value }] };
 }
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+function errorResult(e: unknown) {
+  return {
+    content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
+    isError: true as const,
+  };
+}
+
+function cellValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  if (!path.includes(".")) return obj[path];
+  let current: unknown = obj;
+  for (const key of path.split(".")) {
+    if (current === null || current === undefined || typeof current !== "object")
+      return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function listResult(
+  items: ReadonlyArray<Record<string, unknown>>,
+  columns: ReadonlyArray<string>,
+  total?: number
+) {
+  if (items.length === 0) return text("Total: 0\nNo items found.");
+  const header = columns.join("\t");
+  const rows = items.map((item) =>
+    columns.map((col) => cellValue(getNestedValue(item, col))).join("\t")
+  );
+  return text(`Total: ${total ?? items.length}\n${header}\n${rows.join("\n")}`);
+}
+
+function mutationResult(
+  action: string,
+  entity: string,
+  item: Record<string, unknown>
+) {
+  const id = item?.id ?? "";
+  const name = item?.name ? ` (${item.name})` : "";
+  return text(`OK: ${entity} ${id} ${action}${name}`);
+}
+
+type BulkListEntry =
+  | { zone: string; ok: true; zone_id: string; zone_name: string; records: DnsRecord[] }
+  | { zone: string; ok: false; error: string };
+
+function bulkListResult(results: BulkListEntry[], columns: ReadonlyArray<string>) {
+  const succeeded = results.filter((r) => r.ok).length;
+  const failed = results.length - succeeded;
+  const lines: string[] = [
+    `Zones: ${results.length} (succeeded: ${succeeded}, failed: ${failed})`,
+  ];
+
+  for (const r of results) {
+    if (!r.ok) lines.push(`FAIL: ${r.zone} - ${r.error}`);
+  }
+
+  const ok = results.filter((r): r is Extract<BulkListEntry, { ok: true }> => r.ok);
+  const totalRecords = ok.reduce((s, r) => s + r.records.length, 0);
+
+  if (totalRecords === 0) {
+    lines.push("\nRecords: 0");
+  } else {
+    lines.push(`\nRecords: ${totalRecords}`);
+    lines.push(["zone", ...columns].join("\t"));
+    for (const r of ok) {
+      for (const rec of r.records) {
+        const cells = [
+          r.zone_name,
+          ...columns.map((c) =>
+            cellValue(getNestedValue(rec as unknown as Record<string, unknown>, c))
+          ),
+        ];
+        lines.push(cells.join("\t"));
+      }
+    }
+  }
+
+  const out = text(lines.join("\n"));
+  return failed > 0 ? { ...out, isError: true as const } : out;
+}
+
+type BulkMutationEntry =
+  | { ok: true; zone?: string; record: Record<string, unknown> }
+  | {
+      ok: false;
+      zone?: string;
+      record_id?: string;
+      name?: string;
+      error: string;
+    };
+
+function bulkMutationResult(action: string, results: BulkMutationEntry[]) {
+  const succeeded = results.filter((r) => r.ok).length;
+  const failed = results.length - succeeded;
+  const lines: string[] = [`Succeeded: ${succeeded}, Failed: ${failed}`];
+  for (const r of results) {
+    if (r.ok) {
+      const id = r.record.id ?? "";
+      const name = r.record.name ? ` (${r.record.name})` : "";
+      const zone = r.zone ? `${r.zone}/` : "";
+      lines.push(`OK: ${zone}${id} ${action}${name}`);
+    } else {
+      const ref = r.record_id ?? r.name ?? "?";
+      const zone = r.zone ? `${r.zone}/` : "";
+      lines.push(`FAIL: ${zone}${ref} - ${r.error}`);
+    }
+  }
+  const out = text(lines.join("\n"));
+  return failed > 0 ? { ...out, isError: true as const } : out;
+}
+
+const ZONE_COLUMNS = ["id", "name", "status", "account.name"] as const;
+const DNS_COLUMNS = ["id", "type", "name", "content", "proxied", "ttl"] as const;
 
 const server = new McpServer({
   name: "mcp-cloudflare",
@@ -212,28 +318,13 @@ server.registerTool(
       if (page) params.set("page", String(page));
       const qs = params.toString();
       const data = await cfFetch<Zone[]>(`/zones${qs ? `?${qs}` : ""}`);
-      const summary = data.result.map((z) => ({
-        id: z.id,
-        name: z.name,
-        status: z.status,
-        account: z.account?.name,
-      }));
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              zones: summary,
-              result_info: data.result_info,
-            }),
-          },
-        ],
-      };
+      return listResult(
+        data.result as unknown as Record<string, unknown>[],
+        ZONE_COLUMNS,
+        data.result_info?.total_count
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -285,29 +376,19 @@ server.registerTool(
   },
   async ({ zone, type, name, per_page, page }) => {
     try {
-      const { id: zoneId, name: zoneName } = await resolveZoneId(zone);
+      const { id: zoneId } = await resolveZoneId(zone);
       const { records, result_info } = await fetchDnsRecords(
         zoneId,
         { type, name },
         { per_page: per_page ?? 100, page }
       );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              zone: { id: zoneId, name: zoneName },
-              records: records.map(summarizeRecord),
-              result_info,
-            }),
-          },
-        ],
-      };
+      return listResult(
+        records as unknown as Record<string, unknown>[],
+        DNS_COLUMNS,
+        result_info?.total_count ?? records.length
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -317,7 +398,7 @@ server.registerTool(
   {
     title: "Bulk List DNS Records",
     description:
-      "List DNS records across multiple zones in a single call. Same type/name filters apply to every zone. Executes concurrently per-zone and auto-paginates each. Returns one result entry per zone with ok=true/false.",
+      "List DNS records across multiple zones in a single call. Same type/name filters apply to every zone. Executes concurrently per-zone and auto-paginates each. Returns a flat TSV with a 'zone' column plus per-zone failures.",
     annotations: {
       readOnlyHint: true,
       idempotentHint: true,
@@ -349,7 +430,7 @@ server.registerTool(
   async ({ zones, type, name, per_page }) => {
     const cache: ZoneCache = new Map();
     const results = await Promise.all(
-      zones.map(async (z) => {
+      zones.map(async (z): Promise<BulkListEntry> => {
         try {
           const ref = await resolveZoneId(z, cache);
           const { records } = await fetchDnsRecords(
@@ -359,36 +440,17 @@ server.registerTool(
           );
           return {
             zone: z,
-            ok: true as const,
+            ok: true,
             zone_id: ref.id,
             zone_name: ref.name,
-            count: records.length,
-            records: records.map(summarizeRecord),
+            records,
           };
         } catch (e) {
-          return {
-            zone: z,
-            ok: false as const,
-            error: errorText(e),
-          };
+          return { zone: z, ok: false, error: errorText(e) };
         }
       })
     );
-    const hasError = results.some((r) => !r.ok);
-    const succeeded = results.filter((r) => r.ok).length;
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: formatJson({
-            succeeded,
-            failed: results.length - succeeded,
-            results,
-          }),
-        },
-      ],
-      ...(hasError ? { isError: true } : {}),
-    };
+    return bulkListResult(results, DNS_COLUMNS);
   }
 );
 
@@ -448,28 +510,13 @@ server.registerTool(
           body: JSON.stringify(body),
         }
       );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              created: {
-                id: data.result.id,
-                type: data.result.type,
-                name: data.result.name,
-                content: data.result.content,
-                proxied: data.result.proxied,
-                ttl: data.result.ttl,
-              },
-            }),
-          },
-        ],
-      };
+      return mutationResult(
+        "created",
+        "A record",
+        data.result as unknown as Record<string, unknown>
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -532,28 +579,13 @@ server.registerTool(
           body: JSON.stringify(body),
         }
       );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              created: {
-                id: data.result.id,
-                type: data.result.type,
-                name: data.result.name,
-                content: data.result.content,
-                proxied: data.result.proxied,
-                ttl: data.result.ttl,
-              },
-            }),
-          },
-        ],
-      };
+      return mutationResult(
+        "created",
+        "CNAME record",
+        data.result as unknown as Record<string, unknown>
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -642,27 +674,13 @@ server.registerTool(
         }
       );
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              updated: {
-                id: updated.result.id,
-                type: updated.result.type,
-                name: updated.result.name,
-                content: updated.result.content,
-                proxied: updated.result.proxied,
-              },
-            }),
-          },
-        ],
-      };
+      return mutationResult(
+        `proxy ${proxied ? "ON" : "OFF"}`,
+        "Record",
+        updated.result as unknown as Record<string, unknown>
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -718,7 +736,7 @@ server.registerTool(
   async ({ proxied, targets }) => {
     const cache: ZoneCache = new Map();
     const results = await Promise.all(
-      targets.map(async (t) => {
+      targets.map(async (t): Promise<BulkMutationEntry> => {
         try {
           const { id: zoneId } = await resolveZoneId(t.zone, cache);
           let recordId = t.record_id;
@@ -763,43 +781,22 @@ server.registerTool(
           );
 
           return {
+            ok: true,
             zone: t.zone,
-            ok: true as const,
-            record: {
-              id: updated.result.id,
-              type: updated.result.type,
-              name: updated.result.name,
-              content: updated.result.content,
-              proxied: updated.result.proxied,
-            },
+            record: updated.result as unknown as Record<string, unknown>,
           };
         } catch (e) {
           return {
+            ok: false,
             zone: t.zone,
             record_id: t.record_id,
             name: t.name,
-            ok: false as const,
             error: errorText(e),
           };
         }
       })
     );
-    const hasError = results.some((r) => !r.ok);
-    const succeeded = results.filter((r) => r.ok).length;
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: formatJson({
-            proxied,
-            succeeded,
-            failed: results.length - succeeded,
-            results,
-          }),
-        },
-      ],
-      ...(hasError ? { isError: true } : {}),
-    };
+    return bulkMutationResult(`proxy ${proxied ? "ON" : "OFF"}`, results);
   }
 );
 
@@ -854,28 +851,13 @@ server.registerTool(
           body: JSON.stringify(body),
         }
       );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({
-              updated: {
-                id: data.result.id,
-                type: data.result.type,
-                name: data.result.name,
-                content: data.result.content,
-                proxied: data.result.proxied,
-                ttl: data.result.ttl,
-              },
-            }),
-          },
-        ],
-      };
+      return mutationResult(
+        "updated",
+        "Record",
+        data.result as unknown as Record<string, unknown>
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
@@ -923,7 +905,7 @@ server.registerTool(
   async ({ updates }) => {
     const cache: ZoneCache = new Map();
     const results = await Promise.all(
-      updates.map(async (u) => {
+      updates.map(async (u): Promise<BulkMutationEntry> => {
         try {
           const { id: zoneId } = await resolveZoneId(u.zone, cache);
           const body: Record<string, unknown> = {};
@@ -942,36 +924,21 @@ server.registerTool(
             }
           );
           return {
+            ok: true,
             zone: u.zone,
-            record_id: u.record_id,
-            ok: true as const,
-            record: summarizeRecord(data.result),
+            record: data.result as unknown as Record<string, unknown>,
           };
         } catch (e) {
           return {
+            ok: false,
             zone: u.zone,
             record_id: u.record_id,
-            ok: false as const,
             error: errorText(e),
           };
         }
       })
     );
-    const hasError = results.some((r) => !r.ok);
-    const succeeded = results.filter((r) => r.ok).length;
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: formatJson({
-            succeeded,
-            failed: results.length - succeeded,
-            results,
-          }),
-        },
-      ],
-      ...(hasError ? { isError: true } : {}),
-    };
+    return bulkMutationResult("updated", results);
   }
 );
 
@@ -1001,19 +968,13 @@ server.registerTool(
         `/zones/${zoneId}/dns_records/${record_id}`,
         { method: "DELETE" }
       );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatJson({ deleted: data.result.id }),
-          },
-        ],
-      };
+      return mutationResult(
+        "deleted",
+        "Record",
+        data.result as unknown as Record<string, unknown>
+      );
     } catch (e) {
-      return {
-        content: [{ type: "text" as const, text: `Failed: ${errorText(e)}` }],
-        isError: true,
-      };
+      return errorResult(e);
     }
   }
 );
