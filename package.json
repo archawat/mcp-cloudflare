@@ -1,6 +1,6 @@
 {
   "name": "@archawat/mcp-cloudflare",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for managing Cloudflare DNS records across multiple domains from one API token",
   "type": "module",
   "bin": {
