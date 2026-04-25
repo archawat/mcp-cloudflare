@@ -12,17 +12,19 @@ New A/CNAME records are created with `proxied: false` (DNS-only) by default — 
 - `bun run build` — Compile to `dist/` (also chmods `dist/index.js` as the `bin` entry)
 
 ## Package Layout
-- Source: `src/index.ts` (single file, starts with `#!/usr/bin/env node` so the compiled `dist/index.js` is directly executable as the `bin` entry).
+- Source: `src/` (entry `src/index.ts` starts with `#!/usr/bin/env node` so the compiled `dist/index.js` is directly executable as the `bin` entry).
 - Published artifacts: `dist/` and `README.md` only (see `files` in `package.json`).
 - Runtime: published JS targets Node ≥18; `bun` is supported for local dev and at runtime (bunx / bun install -g) because the code uses only stdlib APIs (`fetch`, `process.env`, stdio).
 
 ## Architecture
-Single-file MCP server at `src/index.ts`:
-- Env validation at startup (`CLOUDFLARE_API_TOKEN`)
-- `cfFetch()` helper wraps `fetch` against `https://api.cloudflare.com/client/v4` with bearer auth and Cloudflare response envelope unwrapping (throws on `success: false`)
-- `resolveZoneId()` accepts either a 32-char zone ID or a domain name (looks it up by `?name=`), so tool callers can pass `"example.com"` without first fetching zone IDs. Takes an optional `Map<string, Promise<ZoneRef>>` cache used by bulk tools to dedupe lookups.
-- Tools registered via `server.registerTool()` with appropriate annotations
-- Stdio transport for MCP client communication
+Modular MCP server. `src/index.ts` is a ~20-line entry: env check, `McpServer`, `register<Group>Tools(server)` calls, stdio transport.
+
+- `src/cf/client.ts` — `cfFetch()` wraps `https://api.cloudflare.com/client/v4` with bearer auth and envelope unwrapping (throws on `success: false`).
+- `src/cf/zone.ts` — `resolveZoneId()` accepts a zone ID or domain; takes an optional `ZoneCache` (`Map<string, Promise<ZoneRef>>`) for per-invocation dedupe across bulk tools.
+- `src/format.ts` — response formatters (see "Tool responses" below).
+- `src/tools/<group>.ts` — each exports `register<Group>Tools(server)`. Currently only `dns.ts`; add a new file per CF API surface (workers, tunnels, …) and wire one `register…(server)` line into `src/index.ts`.
+
+Relative imports use `.js` extensions — required by Node ESM at runtime; `moduleResolution: bundler` makes the typechecker accept it without complaint.
 
 ## Tools
 | Tool | Purpose |
@@ -40,7 +42,15 @@ Single-file MCP server at `src/index.ts`:
 
 Bulk tools share a per-invocation zone-ID cache, so multiple targets in the same zone only resolve that zone once.
 
-Bulk-tool result shape: `{results: Array<{ok: true, record} | {ok: false, error}>, succeeded, failed}`, with `isError: true` when any item fails (all results still returned).
+Bulk tools return a text summary via `bulkListResult` / `bulkMutationResult`: header line with `succeeded`/`failed` counts, per-failure `FAIL: <ref> - <error>` lines, and (for lists) a flat TSV of all records. `isError: true` whenever any item fails.
+
+## Tool responses
+Prefer `src/format.ts` helpers over JSON dumps (10–50× fewer tokens):
+
+- `listResult(items, cols, total?)` — TSV; define `<ENTITY>_COLUMNS` per group (dns uses `id,type,name,content,proxied,ttl`). Supports dot-notation (`account.name`).
+- `mutationResult(action, entity, item)` — one-liner `OK: <entity> <id> <action> (<name>)` for create/update/delete/toggle.
+- `bulkListResult` / `bulkMutationResult` — flat TSV / per-line `OK:`/`FAIL:` with summary header; sets `isError: true` when any item fails.
+- `errorResult(e)` — uniform `Failed: <message>` with `isError: true`; use in every `catch`.
 
 ## Environment Variables
 - `CLOUDFLARE_API_TOKEN` — Cloudflare API token with `Zone:Read` and `Zone:DNS:Edit` permissions (scope to the zones you want to manage, or "All zones"). Create one at https://dash.cloudflare.com/profile/api-tokens.
