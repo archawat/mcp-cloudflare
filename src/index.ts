@@ -10,7 +10,7 @@ if (!process.env.CLOUDFLARE_API_TOKEN) {
 
 const server = new McpServer({
   name: "mcp-cloudflare",
-  version: "1.1.0",
+  version: "1.2.0",
 });
 
 registerDnsTools(server);
