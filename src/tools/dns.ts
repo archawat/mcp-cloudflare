@@ -403,6 +403,143 @@ export function registerDnsTools(server: McpServer) {
   );
 
   server.registerTool(
+    "create_txt_record",
+    {
+      title: "Create TXT Record",
+      description:
+        "Create a TXT DNS record in the given zone. Use for email-sending setup — SPF (apex), DKIM (e.g. 'selector._domainkey'), and DMARC ('_dmarc') — plus domain-verification strings. TXT records are never proxied. Long values (e.g. DKIM keys) are accepted and chunked by Cloudflare automatically.",
+      annotations: {
+        readOnlyHint: false,
+        idempotentHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        zone: z
+          .string()
+          .describe("Domain name (e.g. 'example.com') or 32-char zone ID."),
+        name: z
+          .string()
+          .describe(
+            "Record name. Use '@' for apex (SPF), or a label/FQDN such as '_dmarc' or 'selector._domainkey'."
+          ),
+        content: z
+          .string()
+          .describe(
+            "TXT value, e.g. 'v=spf1 include:_spf.google.com ~all' or 'v=DMARC1; p=none; rua=mailto:dmarc@example.com'. Pass the raw string — do not add surrounding quotes."
+          ),
+        ttl: z
+          .number()
+          .int()
+          .optional()
+          .describe("TTL in seconds. 1 = automatic. Default 1 (auto)."),
+        comment: z
+          .string()
+          .optional()
+          .describe("Optional comment for the record."),
+      },
+    },
+    async ({ zone, name, content, ttl, comment }) => {
+      try {
+        const { id: zoneId } = await resolveZoneId(zone);
+        const body = {
+          type: "TXT",
+          name,
+          content,
+          ttl: ttl ?? 1,
+          ...(comment ? { comment } : {}),
+        };
+        const data = await cfFetch<DnsRecord>(
+          `/zones/${zoneId}/dns_records`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          }
+        );
+        return mutationResult(
+          "created",
+          "TXT record",
+          data.result as unknown as Record<string, unknown>
+        );
+      } catch (e) {
+        return errorResult(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "create_mx_record",
+    {
+      title: "Create MX Record",
+      description:
+        "Create an MX (mail exchange) DNS record in the given zone, routing inbound email for a domain to a mail server. Lower priority wins. MX targets must be hostnames, not IPs or CNAMEs.",
+      annotations: {
+        readOnlyHint: false,
+        idempotentHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        zone: z
+          .string()
+          .describe("Domain name (e.g. 'example.com') or 32-char zone ID."),
+        name: z
+          .string()
+          .describe(
+            "Record name. Use '@' for the domain apex (most common), or a label/FQDN."
+          ),
+        mail_server: z
+          .string()
+          .describe(
+            "Mail server hostname (e.g. 'aspmx.l.google.com'). Must resolve to A/AAAA, not a CNAME."
+          ),
+        priority: z
+          .number()
+          .int()
+          .min(0)
+          .max(65535)
+          .describe("Preference value (0-65535). Lower = higher priority."),
+        ttl: z
+          .number()
+          .int()
+          .optional()
+          .describe("TTL in seconds. 1 = automatic. Default 1 (auto)."),
+        comment: z
+          .string()
+          .optional()
+          .describe("Optional comment for the record."),
+      },
+    },
+    async ({ zone, name, mail_server, priority, ttl, comment }) => {
+      try {
+        const { id: zoneId } = await resolveZoneId(zone);
+        const body = {
+          type: "MX",
+          name,
+          content: mail_server,
+          priority,
+          ttl: ttl ?? 1,
+          ...(comment ? { comment } : {}),
+        };
+        const data = await cfFetch<DnsRecord>(
+          `/zones/${zoneId}/dns_records`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          }
+        );
+        return mutationResult(
+          "created",
+          "MX record",
+          data.result as unknown as Record<string, unknown>
+        );
+      } catch (e) {
+        return errorResult(e);
+      }
+    }
+  );
+
+  server.registerTool(
     "toggle_proxy",
     {
       title: "Toggle Proxy",

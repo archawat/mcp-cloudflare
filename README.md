@@ -89,6 +89,8 @@ Scope the token to the zones you want to manage, or grant "All zones".
 | `bulk_list_dns_records` | List records across many zones in one call. Concurrent per-zone. |
 | `create_a_record` | Create an A record. `proxied` defaults to `false`. |
 | `create_cname_record` | Create a CNAME record. `proxied` defaults to `false`. |
+| `create_txt_record` | Create a TXT record (SPF, DKIM, DMARC, domain verification). |
+| `create_mx_record` | Create an MX record for mail routing. `priority` required. |
 | `toggle_proxy` | Flip proxy on/off by record ID, or by name (+ optional type). |
 | `bulk_toggle_proxy` | Flip proxy for many records in one call (shared `proxied` value). |
 | `update_dns_record` | Patch `content`, `ttl`, `proxied`, or `comment` on a record. |

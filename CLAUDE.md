@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## Project Overview
-MCP server for managing Cloudflare DNS across multiple zones (domains) from one API token. Supports listing zones and records, creating A and CNAME records, toggling the Cloudflare proxy (orange/grey cloud), and general record update/delete. Human-facing install and usage docs live in `README.md`.
+MCP server for managing Cloudflare DNS across multiple zones (domains) from one API token. Supports listing zones and records, creating A, CNAME, TXT, and MX records (TXT/MX cover email-sending setup — SPF/DKIM/DMARC and mail routing), toggling the Cloudflare proxy (orange/grey cloud), and general record update/delete. Human-facing install and usage docs live in `README.md`.
 
 New A/CNAME records are created with `proxied: false` (DNS-only) by default — callers must opt in to proxying.
 
@@ -34,6 +34,8 @@ Relative imports use `.js` extensions — required by Node ESM at runtime; `modu
 | `bulk_list_dns_records` | List records across many zones in one call; concurrent per-zone auto-pagination |
 | `create_a_record` | Create A record; `proxied` defaults to `false` |
 | `create_cname_record` | Create CNAME record; `proxied` defaults to `false` |
+| `create_txt_record` | Create TXT record (SPF/DKIM/DMARC/verification); never proxied |
+| `create_mx_record` | Create MX record for mail routing; `priority` required |
 | `toggle_proxy` | Flip proxy on/off by record ID or by name (+ optional type) |
 | `bulk_toggle_proxy` | Flip many records' proxy in one call (shared `proxied` value, concurrent) |
 | `update_dns_record` | Patch `content`, `ttl`, `proxied`, or `comment` on a record |
