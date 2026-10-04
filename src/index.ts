@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerDnsTools } from "./tools/dns.js";
+import { registerRulesetTools } from "./tools/rulesets.js";
 import { registerSettingsTools } from "./tools/settings.js";
 
 if (!process.env.CLOUDFLARE_API_TOKEN) {
@@ -16,5 +17,6 @@ const server = new McpServer({
 
 registerDnsTools(server);
 registerSettingsTools(server);
+registerRulesetTools(server);
 
 await server.connect(new StdioServerTransport());
