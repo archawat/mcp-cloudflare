@@ -14,6 +14,17 @@ export type CFResponse<T> = {
   };
 };
 
+export class CFError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly codes: number[]
+  ) {
+    super(message);
+    this.name = "CFError";
+  }
+}
+
 export async function cfFetch<T>(
   path: string,
   init: RequestInit = {}
@@ -31,7 +42,11 @@ export async function cfFetch<T>(
     const msg = data.errors
       ?.map((e) => `[${e.code}] ${e.message}`)
       .join("; ");
-    throw new Error(msg || `Cloudflare API error (HTTP ${res.status})`);
+    throw new CFError(
+      msg || `Cloudflare API error (HTTP ${res.status})`,
+      res.status,
+      data.errors?.map((e) => e.code) ?? []
+    );
   }
   return data;
 }
