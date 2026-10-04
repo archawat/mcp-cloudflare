@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## Project Overview
-MCP server for managing Cloudflare DNS across multiple zones (domains) from one API token. Supports listing zones and records, creating A, CNAME, TXT, and MX records (TXT/MX cover email-sending setup — SPF/DKIM/DMARC and mail routing), toggling the Cloudflare proxy (orange/grey cloud), and general record update/delete. Human-facing install and usage docs live in `README.md`.
+MCP server for managing Cloudflare DNS, zone settings, and Rules across multiple zones (domains) from one API token. Supports listing zones and records, creating A, CNAME, TXT, and MX records (TXT/MX cover email-sending setup — SPF/DKIM/DMARC and mail routing), toggling the Cloudflare proxy (orange/grey cloud), general record update/delete, reading/updating zone settings (`ssl`, `always_use_https`, …), and per-rule CRUD on phase entrypoint rulesets (Configuration Rules, Single Redirects, WAF custom rules, …). Human-facing install and usage docs live in `README.md`.
 
 New A/CNAME records are created with `proxied: false` (DNS-only) by default — callers must opt in to proxying.
 
@@ -19,10 +19,10 @@ New A/CNAME records are created with `proxied: false` (DNS-only) by default — 
 ## Architecture
 Modular MCP server. `src/index.ts` is a ~20-line entry: env check, `McpServer`, `register<Group>Tools(server)` calls, stdio transport.
 
-- `src/cf/client.ts` — `cfFetch()` wraps `https://api.cloudflare.com/client/v4` with bearer auth and envelope unwrapping (throws on `success: false`).
+- `src/cf/client.ts` — `cfFetch()` wraps `https://api.cloudflare.com/client/v4` with bearer auth and envelope unwrapping (throws `CFError` on `success: false`; it carries the HTTP `status` and error `codes`).
 - `src/cf/zone.ts` — `resolveZoneId()` accepts a zone ID or domain; takes an optional `ZoneCache` (`Map<string, Promise<ZoneRef>>`) for per-invocation dedupe across bulk tools.
 - `src/format.ts` — response formatters (see "Tool responses" below).
-- `src/tools/<group>.ts` — each exports `register<Group>Tools(server)`. Currently only `dns.ts`; add a new file per CF API surface (workers, tunnels, …) and wire one `register…(server)` line into `src/index.ts`.
+- `src/tools/<group>.ts` — each exports `register<Group>Tools(server)`: `dns.ts`, `settings.ts` (zone settings), `rulesets.ts` (phase entrypoint rules). Add a new file per CF API surface (workers, tunnels, …) and wire one `register…(server)` line into `src/index.ts`.
 
 Relative imports use `.js` extensions — required by Node ESM at runtime; `moduleResolution: bundler` makes the typechecker accept it without complaint.
 
@@ -41,6 +41,14 @@ Relative imports use `.js` extensions — required by Node ESM at runtime; `modu
 | `update_dns_record` | Patch `content`, `ttl`, `proxied`, or `comment` on a record |
 | `bulk_update_dns_record` | PATCH many records in one call with per-item fields, concurrent |
 | `delete_dns_record` | Delete a record by ID (destructive) |
+| `get_zone_settings` | Read zone settings; defaults to `ssl`, `always_use_https`, `automatic_https_rewrites`, `min_tls_version`. Per-setting `FAIL:` lines |
+| `update_zone_setting` | PATCH one zone setting (zone-wide effect) |
+| `list_phase_rules` | List a phase entrypoint's rules (id, enabled, action, description, expression, action_parameters). 404 → empty, not an error |
+| `create_phase_rule` | POST one rule (optional `position`); PUTs the entrypoint only when it doesn't exist |
+| `update_phase_rule` | PATCH one rule; unspecified fields are kept from the current rule |
+| `delete_phase_rule` | DELETE one rule (destructive) |
+
+Rule tools never PUT an existing entrypoint ruleset — that replaces every rule, wiping rules made in the dashboard. Add, patch, and delete per rule. Update/delete first check that the `rule_id` belongs to the given phase.
 
 Bulk tools share a per-invocation zone-ID cache, so multiple targets in the same zone only resolve that zone once.
 
@@ -55,6 +63,6 @@ Prefer `src/format.ts` helpers over JSON dumps (10–50× fewer tokens):
 - `errorResult(e)` — uniform `Failed: <message>` with `isError: true`; use in every `catch`.
 
 ## Environment Variables
-- `CLOUDFLARE_API_TOKEN` — Cloudflare API token with `Zone:Read` and `Zone:DNS:Edit` permissions (scope to the zones you want to manage, or "All zones"). Create one at https://dash.cloudflare.com/profile/api-tokens.
+- `CLOUDFLARE_API_TOKEN` — Cloudflare API token with `Zone:Read` and `Zone:DNS:Edit` permissions (scope to the zones you want to manage, or "All zones"). The settings/Rules tools additionally need `Zone Settings` and the permission for each rule type (e.g. `Config Rules`, `Single Redirect`, `Zone WAF`) — Read for reads, Edit for writes. Create one at https://dash.cloudflare.com/profile/api-tokens.
 
 `.mcp.json` is gitignored and holds the live token used by the local MCP client — never stage, print, or share its contents. `CLAUDE.local.md` (also gitignored) holds developer-machine specifics like absolute paths.

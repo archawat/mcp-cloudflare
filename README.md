@@ -1,6 +1,6 @@
 # @archawat/mcp-cloudflare
 
-Model Context Protocol (MCP) server for managing Cloudflare DNS across multiple zones (domains) from a single API token. Built for bulk workflows — flipping proxy on/off across many records, auditing DNS across zones, and batched record updates.
+Model Context Protocol (MCP) server for managing Cloudflare DNS, zone settings, and Rules across multiple zones (domains) from a single API token. Built for bulk workflows — flipping proxy on/off across many records, auditing DNS across zones, and batched record updates — plus reading and editing SSL/HTTPS settings, Configuration Rules, Single Redirects, and WAF custom rules.
 
 ## Features
 
@@ -8,6 +8,7 @@ Model Context Protocol (MCP) server for managing Cloudflare DNS across multiple 
 - **Bulk operations** — `bulk_toggle_proxy`, `bulk_update_dns_record`, and `bulk_list_dns_records` run concurrently and share a per-invocation zone-ID cache so repeated zones don't cost extra lookups.
 - **Safe defaults** — new A/CNAME records are created with `proxied: false` (DNS-only, grey cloud). Proxy is opt-in.
 - **Auto-pagination** — `list_dns_records` fetches every page in parallel unless you ask for a specific one.
+- **Per-rule edits** — rule tools add, patch, or delete one rule at a time and never replace a phase's whole ruleset, so rules created in the dashboard are left alone.
 
 ## Install
 
@@ -78,6 +79,13 @@ Create a Cloudflare token at <https://dash.cloudflare.com/profile/api-tokens> wi
 - `Zone:Read`
 - `Zone:DNS:Edit`
 
+Optional, only for the settings and Rules tools (Read for the `get_`/`list_` tools, Edit for the write tools):
+
+- `Zone Settings` — `get_zone_settings`, `update_zone_setting`
+- The permission for each rule type you use — e.g. `Config Rules` (Configuration Rules), `Single Redirect` (Single Redirects), `Zone WAF` (WAF custom rules)
+
+A tool whose permission is missing fails with Cloudflare's authentication error; the DNS tools keep working.
+
 Scope the token to the zones you want to manage, or grant "All zones".
 
 ## Tools
@@ -96,6 +104,24 @@ Scope the token to the zones you want to manage, or grant "All zones".
 | `update_dns_record` | Patch `content`, `ttl`, `proxied`, or `comment` on a record. |
 | `bulk_update_dns_record` | Patch many records in one call with per-item fields. |
 | `delete_dns_record` | Delete a record by ID. Destructive. |
+| `get_zone_settings` | Read zone settings (default: `ssl`, `always_use_https`, `automatic_https_rewrites`, `min_tls_version`). |
+| `update_zone_setting` | Change one zone setting, e.g. `ssl` → `strict`. Zone-wide effect. |
+| `list_phase_rules` | List a phase's rules in evaluation order. A phase with no rules returns an empty list. |
+| `create_phase_rule` | Add one rule to a phase (optional `position`). Creates the phase's ruleset if it doesn't exist yet. |
+| `update_phase_rule` | Patch one rule; fields you don't pass keep their current values. |
+| `delete_phase_rule` | Delete one rule. Destructive. |
+
+Rule tools take a `phase`:
+
+| Phase | Dashboard name | Typical action |
+|---|---|---|
+| `http_config_settings` | Configuration Rules | `set_config` |
+| `http_request_dynamic_redirect` | Single Redirects | `redirect` |
+| `http_request_firewall_custom` | WAF custom rules | `block`, `managed_challenge`, `skip`, … |
+| `http_request_origin` | Origin Rules | `route` |
+| `http_request_cache_settings` | Cache Rules | `set_cache_settings` |
+| `http_request_transform` | URL Rewrite Rules | `rewrite` |
+| `http_response_headers_transform` | Response Header Transform Rules | `rewrite` |
 
 All tools accept either a domain name (`"example.com"`) or a 32-char zone ID as the `zone` argument.
 
@@ -135,6 +161,29 @@ example.com	abc123	A	www.example.com	1.2.3.4	true	1
 Succeeded: 1, Failed: 1
 OK: example.com/abc123 toggled (www.example.com)
 FAIL: other.com/www.other.com - No proxyable record found for 'www.other.com'.
+```
+
+`get_zone_settings`:
+
+```
+Zone: example.com (023e105f4ecef8ad9ca31a8372d0c353) — settings: 2 (failed: 0)
+id	value	editable	modified_on
+ssl	strict	true	2026-09-30T08:12:44.123Z
+always_use_https	off	true	2026-09-30T08:13:02.456Z
+```
+
+`list_phase_rules`:
+
+```
+Zone: example.com — phase http_config_settings — ruleset 2f2feab2026849078ba485f918791bdc — rules: 1
+id	enabled	action	description	expression	action_parameters
+3a03d665bac047339bb530ecb439a90d	true	set_config	app strict SSL	(http.host eq "app.example.com")	{"ssl":"strict"}
+```
+
+`create_phase_rule` / `update_phase_rule` / `delete_phase_rule`:
+
+```
+OK: example.com http_config_settings rule 3a03d665bac047339bb530ecb439a90d created (app strict SSL) — ruleset 2f2feab2026849078ba485f918791bdc now has 1 rules
 ```
 
 Errors return `Failed: <message>` with `isError: true`. Bulk tools also set `isError: true` whenever any item fails, while still returning every result.
